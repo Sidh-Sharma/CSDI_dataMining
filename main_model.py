@@ -47,7 +47,7 @@ class CSDI_base(nn.Module):
         pe = torch.zeros(pos.shape[0], pos.shape[1], d_model).to(self.device)
         position = pos.unsqueeze(2)
         div_term = 1 / torch.pow(
-            10000.0, torch.arange(0, d_model, 2).to(self.device) / d_model
+            10000.0, torch.arange(0, d_model, 2).to(self.device, dtype=torch.float32) / d_model
         )
         pe[:, :, 0::2] = torch.sin(position * div_term)
         pe[:, :, 1::2] = torch.cos(position * div_term)
@@ -148,7 +148,7 @@ class CSDI_base(nn.Module):
     def impute(self, observed_data, cond_mask, side_info, n_samples):
         B, K, L = observed_data.shape
 
-        imputed_samples = torch.zeros(B, n_samples, K, L).to(self.device)
+        imputed_samples = torch.zeros(B, n_samples, K, L).to(self.device, dtype=torch.float32)
 
         for i in range(n_samples):
             # generate noisy observation for unconditional model
@@ -238,12 +238,12 @@ class CSDI_PM25(CSDI_base):
         super(CSDI_PM25, self).__init__(target_dim, config, device)
 
     def process_data(self, batch):
-        observed_data = batch["observed_data"].to(self.device).float()
-        observed_mask = batch["observed_mask"].to(self.device).float()
-        observed_tp = batch["timepoints"].to(self.device).float()
-        gt_mask = batch["gt_mask"].to(self.device).float()
+        observed_data = batch["observed_data"].to(self.device, dtype=torch.float32)
+        observed_mask = batch["observed_mask"].to(self.device, dtype=torch.float32)
+        observed_tp = batch["timepoints"].to(self.device, dtype=torch.float32)
+        gt_mask = batch["gt_mask"].to(self.device, dtype=torch.float32)
         cut_length = batch["cut_length"].to(self.device).long()
-        for_pattern_mask = batch["hist_mask"].to(self.device).float()
+        for_pattern_mask = batch["hist_mask"].to(self.device, dtype=torch.float32)
 
         observed_data = observed_data.permute(0, 2, 1)
         observed_mask = observed_mask.permute(0, 2, 1)
@@ -265,10 +265,10 @@ class CSDI_Physio(CSDI_base):
         super(CSDI_Physio, self).__init__(target_dim, config, device)
 
     def process_data(self, batch):
-        observed_data = batch["observed_data"].to(self.device).float()
-        observed_mask = batch["observed_mask"].to(self.device).float()
-        observed_tp = batch["timepoints"].to(self.device).float()
-        gt_mask = batch["gt_mask"].to(self.device).float()
+        observed_data = batch["observed_data"].to(self.device, dtype=torch.float32)
+        observed_mask = batch["observed_mask"].to(self.device, dtype=torch.float32)
+        observed_tp = batch["timepoints"].to(self.device, dtype=torch.float32)
+        gt_mask = batch["gt_mask"].to(self.device, dtype=torch.float32)
 
         observed_data = observed_data.permute(0, 2, 1)
         observed_mask = observed_mask.permute(0, 2, 1)
