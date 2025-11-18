@@ -287,6 +287,33 @@ class CSDI_Physio(CSDI_base):
         )
 
 
+class CSDI_Traffic(CSDI_base):
+    def __init__(self, config, device, target_dim=6):
+        super(CSDI_Traffic, self).__init__(target_dim, config, device)
+
+    def process_data(self, batch):
+        observed_data = batch["observed_data"].to(self.device, dtype=torch.float32)
+        observed_mask = batch["observed_mask"].to(self.device, dtype=torch.float32)
+        observed_tp = batch["timepoints"].to(self.device, dtype=torch.float32)
+        gt_mask = batch["gt_mask"].to(self.device, dtype=torch.float32)
+
+        observed_data = observed_data.permute(0, 2, 1)
+        observed_mask = observed_mask.permute(0, 2, 1)
+        gt_mask = gt_mask.permute(0, 2, 1)
+
+        cut_length = torch.zeros(len(observed_data)).long().to(self.device)
+        for_pattern_mask = observed_mask
+
+        return (
+            observed_data,
+            observed_mask,
+            observed_tp,
+            gt_mask,
+            for_pattern_mask,
+            cut_length,
+        )
+
+
 
 class CSDI_Forecasting(CSDI_base):
     def __init__(self, config, device, target_dim):
