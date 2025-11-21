@@ -18,6 +18,12 @@ class CSDI_base(nn.Module):
         self.emb_total_dim = self.emb_time_dim + self.emb_feature_dim
         if self.is_unconditional == False:
             self.emb_total_dim += 1  # for conditional mask
+        # physics hooks (dataset-specific loss is attached by dataset-specific model)
+        self.use_physics = False
+        self.lambda_phys = 0.0
+        self.mean = None
+        self.std = None
+        self.physics_loss_fn = None
         self.embed_layer = nn.Embedding(
             num_embeddings=self.target_dim, embedding_dim=self.emb_feature_dim
         )
@@ -133,6 +139,23 @@ class CSDI_base(nn.Module):
         residual = (noise - predicted) * target_mask
         num_eval = target_mask.sum()
         loss = (residual ** 2).sum() / (num_eval if num_eval > 0 else 1)
+
+        # If a dataset-specific physics loss is attached, compute and add it
+        if getattr(self, "use_physics", False) and (self.physics_loss_fn is not None):
+            # current_alpha is alpha_bar_t with shape (B,1,1)
+            sqrt_alpha = current_alpha.sqrt()
+            sqrt_one_minus_alpha = (1.0 - current_alpha).sqrt()
+
+            # reconstruct x0 estimate: shape (B,K,L)
+            x_hat = (noisy_data - sqrt_one_minus_alpha * predicted) / (sqrt_alpha + 1e-8)
+
+            try:
+                phys_loss = self.physics_loss_fn(x_hat)
+                loss = loss + float(self.lambda_phys) * phys_loss
+            except Exception:
+                # if physics loss fails, skip it gracefully
+                pass
+
         return loss
 
     def set_input_to_diffmodel(self, noisy_data, observed_data, cond_mask):
@@ -288,8 +311,124 @@ class CSDI_Physio(CSDI_base):
 
 
 class CSDI_Traffic(CSDI_base):
-    def __init__(self, config, device, target_dim=6):
+    def __init__(
+        self,
+        config,
+        device,
+        target_dim=6,
+        use_physics=False,
+        lambda_phys=1.0,
+        mean=None,
+        std=None,
+    ):
+        """
+        Dataset-specific wrapper for traffic. Accepts optional physics args so training script
+        can pass `use_physics`, `lambda_phys`, `mean`, and `std` directly.
+        """
         super(CSDI_Traffic, self).__init__(target_dim, config, device)
+        model_cfg = config.get("model", {})
+        physics_cfg = model_cfg.get("physics", {})
+
+        # determine whether physics is enabled (explicit arg takes precedence)
+        use_phys = bool(use_physics or model_cfg.get("use_physics", model_cfg.get("use_physics_loss", 0)))
+        lambda_p = float(lambda_phys if lambda_phys is not None else model_cfg.get("lambda_phys", model_cfg.get("physics_loss_weight", 0.0)))
+
+        if use_phys:
+            try:
+                from physics import physics_traffic
+
+                pos_idx = int(physics_cfg.get("pos_index", physics_cfg.get("pos_idx", 0)))
+                vel_idx = int(physics_cfg.get("vel_index", physics_cfg.get("vel_idx", 2)))
+                acc_idx = int(physics_cfg.get("acc_index", physics_cfg.get("acc_idx", 3)))
+                dt = float(physics_cfg.get("dt", 0.1))
+
+                mean_t = None if mean is None else torch.tensor(mean, dtype=torch.float32, device=device)
+                std_t = None if std is None else torch.tensor(std, dtype=torch.float32, device=device)
+
+                # closure that will use mean/std from closure or fallback to self.mean/self.std
+                def _make_phys_fn(mean_tensor, std_tensor):
+                    def _fn(x_hat):
+                        m = mean_tensor if mean_tensor is not None else self.mean
+                        s = std_tensor if std_tensor is not None else self.std
+                        return physics_traffic.physics_loss_soft(
+                            x_hat, m, s, pos_idx=pos_idx, vel_idx=vel_idx, acc_idx=acc_idx, dt=dt
+                        )
+
+                    return _fn
+
+                self.physics_loss_fn = _make_phys_fn(mean_t, std_t)
+                self.use_physics = True
+                self.lambda_phys = lambda_p
+                if mean_t is not None:
+                    self.mean = mean_t
+                if std_t is not None:
+                    self.std = std_t
+            except Exception:
+                self.physics_loss_fn = None
+                self.use_physics = False
+                self.lambda_phys = 0.0
+        else:
+            self.physics_loss_fn = None
+            self.use_physics = False
+            self.lambda_phys = 0.0
+
+
+class CSDI_RBC(CSDI_base):
+    def __init__(
+        self,
+        config,
+        device,
+        target_dim,
+        use_physics=False,
+        lambda_phys=1.0,
+        mean=None,
+        std=None,
+    ):
+        """
+        Dataset-specific wrapper for Rayleigh-Benard (RBC) data. Accepts optional
+        physics args so training script can pass `use_physics`, `lambda_phys`, `mean`, and `std`.
+        """
+        super(CSDI_RBC, self).__init__(target_dim, config, device)
+        model_cfg = config.get("model", {})
+        physics_cfg = model_cfg.get("physics", {})
+
+        use_phys = bool(use_physics or model_cfg.get("use_physics", model_cfg.get("use_physics_loss", 0)))
+        lambda_p = float(lambda_phys if lambda_phys is not None else model_cfg.get("lambda_phys", model_cfg.get("physics_loss_weight", 0.0)))
+
+        if use_phys:
+            try:
+                # attempt to import dataset-specific physics loss; may not exist yet
+                from physics import physics_rbc
+
+                # indices and dt are dataset-dependent; allow config override
+                dt = float(physics_cfg.get("dt", 0.1))
+
+                mean_t = None if mean is None else torch.tensor(mean, dtype=torch.float32, device=device)
+                std_t = None if std is None else torch.tensor(std, dtype=torch.float32, device=device)
+
+                def _make_phys_fn(mean_tensor, std_tensor):
+                    def _fn(x_hat):
+                        m = mean_tensor if mean_tensor is not None else self.mean
+                        s = std_tensor if std_tensor is not None else self.std
+                        return physics_rbc.physics_loss_fn(x_hat, m, s, dt=dt)
+
+                    return _fn
+
+                self.physics_loss_fn = _make_phys_fn(mean_t, std_t)
+                self.use_physics = True
+                self.lambda_phys = lambda_p
+                if mean_t is not None:
+                    self.mean = mean_t
+                if std_t is not None:
+                    self.std = std_t
+            except Exception:
+                self.physics_loss_fn = None
+                self.use_physics = False
+                self.lambda_phys = 0.0
+        else:
+            self.physics_loss_fn = None
+            self.use_physics = False
+            self.lambda_phys = 0.0
 
     def process_data(self, batch):
         observed_data = batch["observed_data"].to(self.device, dtype=torch.float32)
