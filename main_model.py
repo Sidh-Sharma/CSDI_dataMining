@@ -372,6 +372,29 @@ class CSDI_Traffic(CSDI_base):
             self.use_physics = False
             self.lambda_phys = 0.0
 
+    def process_data(self, batch):
+        observed_data = batch["observed_data"].to(self.device, dtype=torch.float32)
+        observed_mask = batch["observed_mask"].to(self.device, dtype=torch.float32)
+        observed_tp = batch["timepoints"].to(self.device, dtype=torch.float32)
+        gt_mask = batch["gt_mask"].to(self.device, dtype=torch.float32)
+
+        # permute from (B, L, K) -> (B, K, L)
+        observed_data = observed_data.permute(0, 2, 1)
+        observed_mask = observed_mask.permute(0, 2, 1)
+        gt_mask = gt_mask.permute(0, 2, 1)
+
+        cut_length = torch.zeros(len(observed_data)).long().to(self.device)
+        for_pattern_mask = observed_mask
+
+        return (
+            observed_data,
+            observed_mask,
+            observed_tp,
+            gt_mask,
+            for_pattern_mask,
+            cut_length,
+        )
+
 
 class CSDI_RBC(CSDI_base):
     def __init__(
