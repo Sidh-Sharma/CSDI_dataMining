@@ -15,7 +15,7 @@ FEATURES = [
 	"Local_Y",
 	"v_Vel",
 	"v_Acc",
-	"Lane_ID",
+	# "Lane_ID",
 	"Space_Headway",
 ]
 
@@ -80,10 +80,9 @@ def create_processed_windows(base_dir="data/gps_i80", out_dir="data/gps_i80/proc
 		df = _standardize_columns(df)
 		df["period_id"] = period
 
-		# Ensure numeric frame id
 		df["Frame_ID"] = pd.to_numeric(df["Frame_ID"], errors="coerce")
 
-		# group by vehicle within this period
+		# group by vehicle within particulra period
 		for vid, g in df.groupby("Vehicle_ID"):
 			g = g.sort_values("Frame_ID")
 			frames = g["Frame_ID"].values
@@ -151,9 +150,9 @@ def create_processed_windows(base_dir="data/gps_i80", out_dir="data/gps_i80/proc
 			if std[k] == 0 or np.isnan(std[k]):
 				std[k] = 1.0
 
-	# normalize windows and apply gt_mask
 	rng = np.random.RandomState(seed)
 
+	# normalize windows and apply gt_mask
 	def _process_list(windows):
 		out = []
 		for w in windows:

@@ -3,3 +3,5 @@ save/
 .vscode/
 *.pyc
 __pycache__/
+# *.log
+*.code-workspace

@@ -17,6 +17,10 @@ def train(
     if foldername != "":
         output_path = foldername + "/model.pth"
 
+    save_interval = int(config.get("save_interval", 10))
+
+    last_checkpoint_path = None
+
     p1 = int(0.75 * config["epochs"])
     p2 = int(0.9 * config["epochs"])
     lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(
@@ -69,9 +73,27 @@ def train(
                     "at",
                     epoch_no,
                 )
+                # save best model
+                if foldername != "":
+                    best_path = foldername + "/best_model.pth"
+                    torch.save(model.state_dict(), best_path)
+                    print("Saved best model to", best_path)
+
+        # periodic checkpoint saving
+        if foldername != "" and ((epoch_no + 1) % save_interval == 0):
+            ckpt_path = foldername + f"/model_epoch_{epoch_no+1}.pth"
+            torch.save(model.state_dict(), ckpt_path)
+            last_checkpoint_path = ckpt_path
+            print("Saved checkpoint to", ckpt_path)
 
     if foldername != "":
+        # final save
         torch.save(model.state_dict(), output_path)
+        print("Saved final model to", output_path)
+        if last_checkpoint_path is not None and last_checkpoint_path != output_path:
+            # also copy last checkpoint to a consistent name `latest.pth`
+            latest_path = foldername + "/latest.pth"
+            torch.save(model.state_dict(), latest_path)
 
 
 def quantile_loss(target, forecast, q: float, eval_points) -> float:
