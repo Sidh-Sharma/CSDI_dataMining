@@ -20,6 +20,8 @@ parser.add_argument(
 parser.add_argument("--unconditional", action="store_true")
 parser.add_argument("--modelfolder", type=str, default="")
 parser.add_argument("--nsample", type=int, default=100)
+parser.add_argument("--use_physics", action="store_true", help="Enable dataset physics loss")
+parser.add_argument("--lambda_phys", type=float, default=1e-6, help="Weight for physics loss term")
 
 args = parser.parse_args()
 print(args)
@@ -47,7 +49,14 @@ train_loader, valid_loader, test_loader, mean, std = get_dataloader(
 )
 
 
-model = CSDI_Traffic(config, args.device).to(args.device)
+model = CSDI_Traffic(
+    config,
+    args.device,
+    use_physics=args.use_physics,
+    lambda_phys=args.lambda_phys,
+    mean=mean,
+    std=std,
+).to(args.device)
 
 if args.modelfolder == "":
     train(
