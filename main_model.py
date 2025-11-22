@@ -310,6 +310,93 @@ class CSDI_Physio(CSDI_base):
         )
 
 
+class CSDI_Fluid_Kaggle(CSDI_base):
+    def __init__(
+        self,
+        config,
+        device,
+        target_dim,
+        use_physics=False,
+        lambda_phys=1.0,
+        mean=None,
+        std=None,
+    ):
+        """
+        Dataset-specific wrapper for the Kaggle fluid flow CSV data (processed by
+        `dataset_flow.read_laminar_flow`). Accepts optional physics args so
+        training script can pass `use_physics`, `lambda_phys`, `mean`, and `std`.
+        When `use_physics` is True this will attempt to attach a dataset-specific
+        physics loss function; if unavailable the physics hook is disabled.
+        """
+        super(CSDI_Fluid_Kaggle, self).__init__(target_dim, config, device)
+        model_cfg = config.get("model", {})
+        physics_cfg = model_cfg.get("physics", {})
+
+        use_phys = bool(use_physics or model_cfg.get("use_physics", model_cfg.get("use_physics_loss", 0)))
+        lambda_p = float(lambda_phys if lambda_phys is not None else model_cfg.get("lambda_phys", model_cfg.get("physics_loss_weight", 0.0)))
+
+        if use_phys:
+            try:
+                # Try to import a dataset-specific physics module. If not present,
+                # fall back to disabling physics.
+                from physics import physics_fluid
+
+                dt = float(physics_cfg.get("dt", 0.1))
+
+                mean_t = None if mean is None else torch.tensor(mean, dtype=torch.float32, device=device)
+                std_t = None if std is None else torch.tensor(std, dtype=torch.float32, device=device)
+
+                def _make_phys_fn(mean_tensor, std_tensor):
+                    def _fn(x_hat):
+                        m = mean_tensor if mean_tensor is not None else self.mean
+                        s = std_tensor if std_tensor is not None else self.std
+                        # Delegate to dataset-specific implementation. Keep placeholder
+                        # name `physics_loss_fn` to match other dataset hooks.
+                        return physics_fluid.physics_loss_fn(x_hat, m, s, dt=dt)
+
+                    return _fn
+
+                self.physics_loss_fn = _make_phys_fn(mean_t, std_t)
+                self.use_physics = True
+                self.lambda_phys = lambda_p
+                if mean_t is not None:
+                    self.mean = mean_t
+                if std_t is not None:
+                    self.std = std_t
+            except Exception:
+                # If import or setup fails, disable physics gracefully.
+                self.physics_loss_fn = None
+                self.use_physics = False
+                self.lambda_phys = 0.0
+        else:
+            self.physics_loss_fn = None
+            self.use_physics = False
+            self.lambda_phys = 0.0
+
+    def process_data(self, batch):
+        observed_data = batch["observed_data"].to(self.device, dtype=torch.float32)
+        observed_mask = batch["observed_mask"].to(self.device, dtype=torch.float32)
+        observed_tp = batch["timepoints"].to(self.device, dtype=torch.float32)
+        gt_mask = batch["gt_mask"].to(self.device, dtype=torch.float32)
+
+        # Permute to (B, K, L) like other dataset wrappers
+        observed_data = observed_data.permute(0, 2, 1)
+        observed_mask = observed_mask.permute(0, 2, 1)
+        gt_mask = gt_mask.permute(0, 2, 1)
+
+        cut_length = torch.zeros(len(observed_data)).long().to(self.device)
+        for_pattern_mask = observed_mask
+
+        return (
+            observed_data,
+            observed_mask,
+            observed_tp,
+            gt_mask,
+            for_pattern_mask,
+            cut_length,
+        )
+
+
 class CSDI_Traffic(CSDI_base):
     def __init__(
         self,

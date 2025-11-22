@@ -179,11 +179,18 @@ def evaluate(model, test_loader, nsample=100, scaler=1, mean_scaler=0, foldernam
                 mse_total += mse_current.sum().item()
                 mae_total += mae_current.sum().item()
                 evalpoints_total += eval_points.sum().item()
+                # Avoid division by zero when no evaluation points are present
+                if evalpoints_total > 0:
+                    safe_rmse = np.sqrt(mse_total / evalpoints_total)
+                    safe_mae = mae_total / evalpoints_total
+                else:
+                    safe_rmse = float("nan")
+                    safe_mae = float("nan")
 
                 it.set_postfix(
                     ordered_dict={
-                        "rmse_total": np.sqrt(mse_total / evalpoints_total),
-                        "mae_total": mae_total / evalpoints_total,
+                        "rmse_total": safe_rmse,
+                        "mae_total": safe_mae,
                         "batch_no": batch_no,
                     },
                     refresh=True,
@@ -211,25 +218,34 @@ def evaluate(model, test_loader, nsample=100, scaler=1, mean_scaler=0, foldernam
                     f,
                 )
 
-            CRPS = calc_quantile_CRPS(
-                all_target, all_generated_samples, all_evalpoint, mean_scaler, scaler
-            )
-            CRPS_sum = calc_quantile_CRPS_sum(
-                all_target, all_generated_samples, all_evalpoint, mean_scaler, scaler
-            )
+            # Compute final metrics safely (guard against zero eval points)
+            if evalpoints_total > 0:
+                rmse_final = np.sqrt(mse_total / evalpoints_total)
+                mae_final = mae_total / evalpoints_total
+                CRPS = calc_quantile_CRPS(
+                    all_target, all_generated_samples, all_evalpoint, mean_scaler, scaler
+                )
+                CRPS_sum = calc_quantile_CRPS_sum(
+                    all_target, all_generated_samples, all_evalpoint, mean_scaler, scaler
+                )
+            else:
+                rmse_final = float("nan")
+                mae_final = float("nan")
+                CRPS = float("nan")
+                CRPS_sum = float("nan")
 
             with open(
                 foldername + "/result_nsample" + str(nsample) + ".pk", "wb"
             ) as f:
                 pickle.dump(
                     [
-                        np.sqrt(mse_total / evalpoints_total),
-                        mae_total / evalpoints_total,
+                        rmse_final,
+                        mae_final,
                         CRPS,
                     ],
                     f,
                 )
-                print("RMSE:", np.sqrt(mse_total / evalpoints_total))
-                print("MAE:", mae_total / evalpoints_total)
+                print("RMSE:", rmse_final)
+                print("MAE:", mae_final)
                 print("CRPS:", CRPS)
                 print("CRPS_sum:", CRPS_sum)
