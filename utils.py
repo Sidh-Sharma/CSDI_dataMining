@@ -154,13 +154,7 @@ def evaluate(model, test_loader, nsample=100, scaler=1, mean_scaler=0, foldernam
         all_generated_samples = []
         with tqdm(test_loader, mininterval=5.0, maxinterval=50.0) as it:
             for batch_no, test_batch in enumerate(it, start=1):
-                # Debugging / timing: record start time for this batch evaluation
-                import time
-                start_t = time.perf_counter()
-                print(f"[EVAL] Starting model.evaluate for batch {batch_no} / approx {len(test_loader)} at {start_t:.3f}")
                 output = model.evaluate(test_batch, nsample)
-                end_t = time.perf_counter()
-                print(f"[EVAL] Finished model.evaluate for batch {batch_no}; elapsed {end_t - start_t:.3f}s")
 
                 samples, c_target, eval_points, observed_points, observed_time = output
                 samples = samples.permute(0, 1, 3, 2)  # (B,nsample,L,K)
