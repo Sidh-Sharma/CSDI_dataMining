@@ -273,6 +273,7 @@ parser.add_argument("--modelfolder", type=str, default="")
 parser.add_argument("--nsample", type=int, default=100)
 parser.add_argument("--use_physics", action="store_false", help="Enable dataset physics loss")
 parser.add_argument("--lambda_phys", type=float, default=1.0, help="Weight for physics loss term")
+parser.add_argument("--use_projection", action="store_true", help="Project generated flow onto feasible manifold")
 parser.add_argument("--gt_mode", type=str, choices=["none", "random", "all"], default="random", help="Ground-truth (conditioning) mask mode for dataset: none/random/all")
 parser.add_argument("--gt_fraction", type=float, default=0.1, help="Fraction of points to mark as given when --gt_mode=random")
 parser.add_argument("--verify", action="store_true", help="Run derivative verification against CSV and exit")
@@ -367,6 +368,7 @@ model = CSDI_Fluid_Kaggle(
     target_dim=target_dim,
     use_physics=args.use_physics,
     lambda_phys=args.lambda_phys,
+    use_projection=args.use_projection,
     mean=mean,
     std=std,
 ).to(args.device)

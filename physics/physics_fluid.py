@@ -78,7 +78,7 @@ def physics_loss_fn(x_hat, mean=None, std=None, dt=0.1):
     # TODO: implement mapping from x_hat -> continuous model(coords) and use
     # compute_physics_loss / compute_boundary_loss. For now, return zero so
     # training remains stable.
-    # Expect x_hat shape: (B, K, L) where K possibly equals 3 * (H*W)
+    # Expect x_hat shape: (B, K, L) where K equals 3 * (H*W)
     if not isinstance(x_hat, torch.Tensor):
         return torch.tensor(0.0, dtype=torch.float32)
 

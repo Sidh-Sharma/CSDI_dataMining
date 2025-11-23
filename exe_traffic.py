@@ -22,6 +22,7 @@ parser.add_argument("--modelfolder", type=str, default="")
 parser.add_argument("--nsample", type=int, default=100)
 parser.add_argument("--use_physics", action="store_true", help="Enable dataset physics loss")
 parser.add_argument("--lambda_phys", type=float, default=1e-6, help="Weight for physics loss term")
+parser.add_argument("--use_projection", action="store_true", help="Project generated trajectories onto kinematic manifold")
 
 args = parser.parse_args()
 print(args)
@@ -54,6 +55,7 @@ model = CSDI_Traffic(
     args.device,
     use_physics=args.use_physics,
     lambda_phys=args.lambda_phys,
+    use_projection=args.use_projection,
     mean=mean,
     std=std,
 ).to(args.device)

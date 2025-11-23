@@ -24,6 +24,11 @@ class CSDI_base(nn.Module):
         self.mean = None
         self.std = None
         self.physics_loss_fn = None
+        # projection hooks (dataset-specific projection is attached by dataset-specific model)
+        self.use_projection = False
+        self.projection_fn = None
+        self.proj_mapping = None
+        self.proj_dt = None
         self.embed_layer = nn.Embedding(
             num_embeddings=self.target_dim, embedding_dim=self.emb_feature_dim
         )
@@ -207,6 +212,19 @@ class CSDI_base(nn.Module):
                     current_sample += sigma * noise
 
             imputed_samples[:, i] = current_sample.detach()
+        # Optionally project generated samples back onto a feasible manifold
+        if getattr(self, "use_projection", False) and (self.projection_fn is not None):
+            try:
+                B, S, K, L = imputed_samples.shape
+                flattened = imputed_samples.view(B * S, K, L)
+                # projection function expects (N, K, L) and returns same shape
+                proj_out = self.projection_fn(flattened)
+                if proj_out is not None and proj_out.shape == flattened.shape:
+                    imputed_samples = proj_out.view(B, S, K, L)
+            except Exception:
+                # fail safe: if projection errors, return original samples
+                pass
+
         return imputed_samples
 
     def forward(self, batch, is_train=1):
@@ -318,6 +336,7 @@ class CSDI_Fluid_Kaggle(CSDI_base):
         target_dim,
         use_physics=False,
         lambda_phys=1.0,
+        use_projection=False,
         mean=None,
         std=None,
     ):
@@ -373,6 +392,39 @@ class CSDI_Fluid_Kaggle(CSDI_base):
             self.use_physics = False
             self.lambda_phys = 0.0
 
+        # projection setup for fluid dataset: try dataset-specific projection
+        use_proj = bool(use_projection or model_cfg.get("use_projection", False))
+        if use_proj:
+            try:
+                # Prefer a dataset-specific projection if available
+                from physics import physics_fluid
+
+                if hasattr(physics_fluid, "project_flow"):
+                    mean_t = None if mean is None else torch.tensor(mean, dtype=torch.float32, device=device)
+                    std_t = None if std is None else torch.tensor(std, dtype=torch.float32, device=device)
+
+                    def _make_proj_fn(mean_tensor, std_tensor):
+                        def _fn(x_hat):
+                            m = mean_tensor if mean_tensor is not None else self.mean
+                            s = std_tensor if std_tensor is not None else self.std
+                            return physics_fluid.project_flow(x_hat, m, s)
+
+                        return _fn
+
+                    self.projection_fn = _make_proj_fn(mean_t, std_t)
+                    self.use_projection = True
+                    if mean_t is not None:
+                        self.mean = mean_t
+                    if std_t is not None:
+                        self.std = std_t
+                else:
+                    # no projection available for fluid dataset
+                    self.projection_fn = None
+                    self.use_projection = False
+            except Exception:
+                self.projection_fn = None
+                self.use_projection = False
+
     def process_data(self, batch):
         observed_data = batch["observed_data"].to(self.device, dtype=torch.float32)
         observed_mask = batch["observed_mask"].to(self.device, dtype=torch.float32)
@@ -405,6 +457,7 @@ class CSDI_Traffic(CSDI_base):
         target_dim=6,
         use_physics=False,
         lambda_phys=1.0,
+        use_projection=False,
         mean=None,
         std=None,
     ):
@@ -459,6 +512,54 @@ class CSDI_Traffic(CSDI_base):
 
             self.use_physics = False
             self.lambda_phys = 0.0
+        # projection setup (kinematic projection: positions -> speeds -> acc)
+        use_proj = bool(use_projection or model_cfg.get("use_projection", False))
+        if use_proj:
+            try:
+                from physics.constraint_projection import project_trajectories
+
+                # mapping: prefer explicit pos_x/pos_y keys, otherwise pos_index -> (pos, pos+1)
+                pos_x = physics_cfg.get("pos_x")
+                pos_y = physics_cfg.get("pos_y")
+                if pos_x is None and pos_y is None:
+                    pos_index = physics_cfg.get("pos_index", physics_cfg.get("pos_idx", 0))
+                    pos_x = int(pos_index)
+                    pos_y = int(pos_index) + 1
+                else:
+                    pos_x = int(pos_x)
+                    pos_y = int(pos_y)
+
+                vel_idx = int(physics_cfg.get("vel_index", physics_cfg.get("vel_idx", 2)))
+                acc_idx = physics_cfg.get("acc_index", physics_cfg.get("acc_idx", None))
+                acc_idx = None if acc_idx is None else int(acc_idx)
+                dt = float(physics_cfg.get("dt", 0.1))
+
+                mean_t = None if mean is None else torch.tensor(mean, dtype=torch.float32, device=device)
+                std_t = None if std is None else torch.tensor(std, dtype=torch.float32, device=device)
+
+                mapping = {"pos_x": pos_x, "pos_y": pos_y, "vel": vel_idx, "acc": acc_idx}
+
+                def _make_proj_fn(mean_tensor, std_tensor, mapping, dt):
+                    def _fn(x_hat):
+                        m = mean_tensor if mean_tensor is not None else self.mean
+                        s = std_tensor if std_tensor is not None else self.std
+                        return project_trajectories(x_hat, m, s, mapping=mapping, dt=dt)
+
+                    return _fn
+
+                self.projection_fn = _make_proj_fn(mean_t, std_t, mapping, dt)
+                self.use_projection = True
+                self.proj_mapping = mapping
+                self.proj_dt = dt
+                if mean_t is not None:
+                    self.mean = mean_t
+                if std_t is not None:
+                    self.std = std_t
+            except Exception:
+                self.projection_fn = None
+                self.use_projection = False
+                self.proj_mapping = None
+                self.proj_dt = None
 
     def process_data(self, batch):
         observed_data = batch["observed_data"].to(self.device, dtype=torch.float32)
@@ -467,86 +568,6 @@ class CSDI_Traffic(CSDI_base):
         gt_mask = batch["gt_mask"].to(self.device, dtype=torch.float32)
 
         # permute from (B, L, K) -> (B, K, L)
-        observed_data = observed_data.permute(0, 2, 1)
-        observed_mask = observed_mask.permute(0, 2, 1)
-        gt_mask = gt_mask.permute(0, 2, 1)
-
-        cut_length = torch.zeros(len(observed_data)).long().to(self.device)
-        for_pattern_mask = observed_mask
-
-        return (
-            observed_data,
-            observed_mask,
-            observed_tp,
-            gt_mask,
-            for_pattern_mask,
-            cut_length,
-        )
-
-
-class CSDI_RBC(CSDI_base):
-    def __init__(
-        self,
-        config,
-        device,
-        target_dim,
-        use_physics=False,
-        lambda_phys=1.0,
-        mean=None,
-        std=None,
-    ):
-        """
-        Dataset-specific wrapper for Rayleigh-Benard (RBC) data. Accepts optional
-        physics args so training script can pass `use_physics`, `lambda_phys`, `mean`, and `std`.
-        """
-        super(CSDI_RBC, self).__init__(target_dim, config, device)
-        model_cfg = config.get("model", {})
-        physics_cfg = model_cfg.get("physics", {})
-
-        use_phys = bool(use_physics or model_cfg.get("use_physics", model_cfg.get("use_physics_loss", 0)))
-        lambda_p = float(lambda_phys if lambda_phys is not None else model_cfg.get("lambda_phys", model_cfg.get("physics_loss_weight", 0.0)))
-
-        if use_phys:
-            try:
-                # attempt to import dataset-specific physics loss; may not exist yet
-                from physics import physics_rbc
-
-                # indices and dt are dataset-dependent; allow config override
-                dt = float(physics_cfg.get("dt", 0.1))
-
-                mean_t = None if mean is None else torch.tensor(mean, dtype=torch.float32, device=device)
-                std_t = None if std is None else torch.tensor(std, dtype=torch.float32, device=device)
-
-                def _make_phys_fn(mean_tensor, std_tensor):
-                    def _fn(x_hat):
-                        m = mean_tensor if mean_tensor is not None else self.mean
-                        s = std_tensor if std_tensor is not None else self.std
-                        return physics_rbc.physics_loss_fn(x_hat, m, s, dt=dt)
-
-                    return _fn
-
-                self.physics_loss_fn = _make_phys_fn(mean_t, std_t)
-                self.use_physics = True
-                self.lambda_phys = lambda_p
-                if mean_t is not None:
-                    self.mean = mean_t
-                if std_t is not None:
-                    self.std = std_t
-            except Exception:
-                self.physics_loss_fn = None
-                self.use_physics = False
-                self.lambda_phys = 0.0
-        else:
-            self.physics_loss_fn = None
-            self.use_physics = False
-            self.lambda_phys = 0.0
-
-    def process_data(self, batch):
-        observed_data = batch["observed_data"].to(self.device, dtype=torch.float32)
-        observed_mask = batch["observed_mask"].to(self.device, dtype=torch.float32)
-        observed_tp = batch["timepoints"].to(self.device, dtype=torch.float32)
-        gt_mask = batch["gt_mask"].to(self.device, dtype=torch.float32)
-
         observed_data = observed_data.permute(0, 2, 1)
         observed_mask = observed_mask.permute(0, 2, 1)
         gt_mask = gt_mask.permute(0, 2, 1)
