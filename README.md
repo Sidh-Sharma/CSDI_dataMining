@@ -40,6 +40,24 @@ python exe_pm25.py --nsample [number of samples]
 python exe_forecasting.py --datatype electricity --nsample [number of samples]
 ```
 
+### Traffic dataset
+
+Brief: trajectory datasets are handled by `exe_traffic.py`. Trajectories are stored as time-indexed positions, normalized by training-set mean/std, and represented as sequences (T, features). The code provides optional physics-aware training and projection:
+
+- **Preprocessing:** per-feature mean/std computed on training sims; missing values handled with masks.
+- **Physics loss:** kinematic soft constraint (finite-difference velocity/acceleration residuals) enabled with `--use_physics` and weighted by `--lambda_phys`.
+- **Projection:** a post-sampling kinematic projection can be applied with `--use_projection` to map generated trajectories back to a feasible manifold.
+- **CLI example (train + impute):**
+```shell
+python exe_traffic.py --testmissingratio 0.2 --nsample 50 --use_physics --lambda_phys 0.1 --use_projection
+```
+
+### Fluid (Kaggle / PDEBench)
+```shell
+python exe_fluid_kaggle.py  --nsample 10 --use_projection
+```
+
+
 ### Visualize results
 'visualize_examples.ipynb' is a notebook for visualizing results.
 
